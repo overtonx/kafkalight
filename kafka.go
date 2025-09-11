@@ -82,7 +82,7 @@ func (r *KafkaRouter) StartListening(c *kafka.Consumer) error {
 			continue
 		}
 
-		r.mu.RUnlock()
+		r.mu.RLock()
 		handler, exists := r.routes[*msg.TopicPartition.Topic]
 		r.mu.RUnlock()
 
