@@ -62,7 +62,7 @@ func (m *Message) Bind(v interface{}) error {
 	return json.Unmarshal(m.Value, v)
 }
 
-func ConvertKafkaMessageToStruct(kafkaMsg *kafka.Message) (*Message, error) {
+func convertKafkaMessageToStruct(kafkaMsg *kafka.Message) (*Message, error) {
 	msg := &Message{
 		TopicPartition: TopicPartition{
 			Topic:     *kafkaMsg.TopicPartition.Topic,

@@ -72,13 +72,13 @@ func (r *KafkaRouter) StartListening(c *kafka.Consumer) error {
 		}
 
 		if msg.TopicPartition.Topic == nil {
-			r.errorHandler(fmt.Errorf("Topic not found in message: %s", *msg.TopicPartition.Topic))
+			r.errorHandler(fmt.Errorf("topic not found in message: %s", *msg.TopicPartition.Topic))
 			continue
 		}
 
-		kafkaMsg, err := ConvertKafkaMessageToStruct(msg)
+		kafkaMsg, err := convertKafkaMessageToStruct(msg)
 		if err != nil {
-			r.errorHandler(fmt.Errorf("Error converting Kafka message: %v", err))
+			r.errorHandler(fmt.Errorf("error converting Kafka message: %v", err))
 			continue
 		}
 
@@ -87,12 +87,12 @@ func (r *KafkaRouter) StartListening(c *kafka.Consumer) error {
 		r.mu.RUnlock()
 
 		if !exists {
-			r.errorHandler(fmt.Errorf("No handler found for topic: %s", *msg.TopicPartition.Topic))
+			r.errorHandler(fmt.Errorf("no handler found for topic: %s", *msg.TopicPartition.Topic))
 			continue
 		}
 
 		if err := handler(kafkaMsg); err != nil {
-			r.errorHandler(fmt.Errorf("Error handling message: %v", err))
+			r.errorHandler(fmt.Errorf("error handling message: %v", err))
 		}
 	}
 }
