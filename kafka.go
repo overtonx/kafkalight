@@ -2,11 +2,15 @@ package kafkalight
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"go.uber.org/zap"
+)
+
+const (
+	defaultReadTimeout = time.Second * 10
 )
 
 type MessageHandler func(msg *Message) error
@@ -17,21 +21,23 @@ type KafkaRouter struct {
 	routes       map[string]MessageHandler
 	middlewares  []Middleware
 	topics       []string
-	errorHandler func(error)   // Обработчик ошибок
-	readTimeout  time.Duration // Время ожидания сообщения из Kafka
+	errorHandler ErrorHandler
+	readTimeout  time.Duration
+	logger       *zap.Logger
 }
 
 func NewRouter(opts ...Option) *KafkaRouter {
 	router := &KafkaRouter{
-		routes:       make(map[string]MessageHandler),
-		readTimeout:  10 * time.Second,                                 // Значение по умолчанию
-		errorHandler: func(err error) { log.Printf("Error: %v", err) }, // Значение по умолчанию
+		routes:      make(map[string]MessageHandler),
+		readTimeout: defaultReadTimeout,
+		logger:      zap.NewNop(),
 	}
 
-	// Применяем все переданные опции
 	for _, opt := range opts {
 		opt(router)
 	}
+
+	router.errorHandler = errorHandler(router.logger)
 
 	return router
 }
@@ -56,6 +62,9 @@ func (r *KafkaRouter) RegisterRoute(topic string, handler MessageHandler) {
 }
 
 func (r *KafkaRouter) StartListening(c *kafka.Consumer) error {
+	// @todo replace confluent to segmentio
+	// @todo provide and processing context
+
 	r.mu.RLock()
 	err := c.SubscribeTopics(r.topics, nil)
 	r.mu.RUnlock()
@@ -72,7 +81,7 @@ func (r *KafkaRouter) StartListening(c *kafka.Consumer) error {
 		}
 
 		if msg.TopicPartition.Topic == nil {
-			r.errorHandler(fmt.Errorf("topic not found in message: %s", *msg.TopicPartition.Topic))
+			r.errorHandler(fmt.Errorf("topic not found in message"))
 			continue
 		}
 
@@ -91,6 +100,7 @@ func (r *KafkaRouter) StartListening(c *kafka.Consumer) error {
 			continue
 		}
 
+		// @todo create context with trace info
 		if err := handler(kafkaMsg); err != nil {
 			r.errorHandler(fmt.Errorf("error handling message: %v", err))
 		}

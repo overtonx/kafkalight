@@ -58,6 +58,10 @@ func (k *Key) String() string {
 	return string(k.data)
 }
 
+func (k *Key) Exists() bool {
+	return string(k.data) != ""
+}
+
 func (m *Message) Bind(v interface{}) error {
 	return json.Unmarshal(m.Value, v)
 }
