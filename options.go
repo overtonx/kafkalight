@@ -3,10 +3,17 @@ package kafkalight
 import (
 	"time"
 
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"go.uber.org/zap"
 )
 
 type Option func(*KafkaRouter)
+
+func WithConsumerConfig(cfg *kafka.ConfigMap) Option {
+	return func(r *KafkaRouter) {
+		r.consumerConfig = cfg
+	}
+}
 
 func WithErrorHandler(handler func(error)) Option {
 	return func(r *KafkaRouter) {
@@ -22,6 +29,6 @@ func WithReadTimeout(timeout time.Duration) Option {
 
 func WithLogger(logger *zap.Logger) Option {
 	return func(r *KafkaRouter) {
-		r.logger = logger
+		r.logger = logger.With(zap.String("module", "kafka-light"))
 	}
 }

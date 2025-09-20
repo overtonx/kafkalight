@@ -1,170 +1,100 @@
-# Kafkalight - Пакет для работы с Kafka в Go
+# kafkalight
 
-Kafkalight — это Go-пакет, который упрощает подписку на топики Kafka и обработку сообщений в структурированном виде, с поддержкой middleware, обработчиков ошибок и настроек таймаутов.
-
-## Особенности
-
-- **Подписка на топики Kafka** и обработка сообщений через простой и гибкий API.
-- **Поддержка кастомных обработчиков ошибок** с возможностью использования обработчика по умолчанию.
-- **Middleware** для изменения или расширения логики обработки сообщений.
-- **Конфигурируемый таймаут чтения** для consumer'а Kafka.
-- **Маппинг сообщений Kafka** в структурированные типы Go с использованием JSON-десериализации.
-- **Поддержка ключей и заголовков сообщений** в структурированном виде.
+`kafkalight` — это легковесная библиотека на Go для работы с Apache Kafka. Она построена на основе `confluent-kafka-go` и предоставляет простой механизм маршрутизации для обработки сообщений из разных топиков. Библиотека интегрирована с OpenTelemetry для трассировки и Zap для логирования.
 
 ## Установка
-
-Для установки пакета используйте команду `go get`:
 
 ```bash
 go get github.com/overtonx/kafkalight
 ```
 
 ## Использование
-1. Пример базового использования
 
-Пример использования Kafkalight с кастомным обработчиком ошибок и таймаутом для чтения сообщений:
+Вот простой пример использования `kafkalight` для подписки на топик и обработки сообщений:
+
 ```go
 package main
 
 import (
-    "fmt"
-    "log"
-    "github.com/overtonx/kafkalight"
-    "github.com/confluentinc/confluent-kafka-go/kafka"
-    "time"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/overtonx/kafkalight"
 )
 
-// Кастомный обработчик ошибок
-func errorHandler(err error) {
-    log.Printf("Ошибка: %v", err)
-}
-
-// Структура для маппинга данных из Kafka
-type MyMessage struct {
-    Name  string `json:"name"`
-    Value int    `json:"value"`
+// messageHandler - это обработчик для сообщений из Kafka.
+func messageHandler(ctx context.Context, msg *kafkalight.Message) error {
+	fmt.Printf("Сообщение получено из топика %s: %s\n", msg.Topic, string(msg.Value))
+	// Здесь ваша логика обработки сообщения
+	return nil
 }
 
 func main() {
-    // Конфигурация Kafka consumer
-    config := kafka.KafkaConfig{
-        Brokers: "localhost:9092",
-        GroupID: "my-group",
-        Topics:  []string{"topic1", "topic2"},
-    }
+	// Создаем новый роутер с базовой конфигурацией.
+	router, err := kafkalight.NewRouter()
+	if err != nil {
+		log.Fatalf("Ошибка при создании роутера: %v", err)
+	}
 
-    consumer, err := kafka.NewConsumer(config)
-    if err != nil {
-        log.Fatalf("Ошибка при создании Kafka consumer: %v", err)
-    }
-    defer consumer.Close()
+	// Регистрируем обработчик для топика "my-topic".
+	router.RegisterRoute("my-topic", messageHandler)
 
-    // Создаем маршрутизатор с кастомным обработчиком ошибок и таймаутом
-    router := kafkalight.NewRouter(
-        kafkalight.WithErrorHandler(errorHandler),        // Кастомный обработчик ошибок
-        kafkalight.WithReadTimeout(5*time.Second),        // Установка таймаута для Kafka consumer
-    )
+	// Запускаем прослушивание сообщений в отдельной горутине.
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		log.Println("Запуск прослушивания Kafka...")
+		if err := router.StartListening(ctx); err != nil {
+			log.Printf("Ошибка при прослушивании: %v", err)
+		}
+	}()
 
-    // Регистрируем обработчик для "topic1"
-    router.RegisterRoute("topic1", func(msg *kafkalight.Message) error {
-        var myMsg MyMessage
-        // Маппим Kafka сообщение в структуру
-        err := msg.Bind(&myMsg)
-        if err != nil {
-            return err
-        }
-        fmt.Printf("Получено сообщение на topic1: %+v\n", myMsg)
-        return nil
-    })
+	// Ожидаем сигнала для завершения работы.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
 
-    // Начинаем слушать сообщения из Kafka
-    if err := router.StartListening(consumer); err != nil {
-        log.Fatalf("Ошибка при запуске прослушивания: %v", err)
-    }
+	log.Println("Получен сигнал завершения, остановка...")
+	cancel() // Отменяем контекст, чтобы остановить StartListening
+
+	// Корректно завершаем работу роутера.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := router.Close(shutdownCtx); err != nil {
+		log.Fatalf("Ошибка при закрытии роутера: %v", err)
+	}
+	log.Println("Роутер успешно остановлен.")
 }
-
 ```
-## 2. Регистрация маршрутов
 
-Для регистрации обработчиков сообщений для конкретных топиков Kafka используйте метод RegisterRoute. Обработчик получит типизированное сообщение, которое можно обрабатывать.
-```go
-router.RegisterRoute("topic1", func(msg *kafkalight.Message) error {
-    var myMsg MyMessage
-    // Маппим Kafka сообщение в структуру
-    err := msg.Bind(&myMsg)
-    if err != nil {
-        return err
-    }
-    fmt.Println("Получено сообщение:", myMsg)
-    return nil
-})
-```
-## 3. Использование Middleware
+## Конфигурация
 
-Middleware позволяет изменить или расширить логику обработки сообщений. Можно применить несколько middleware для одного обработчика.
+Вы можете настроить роутер, передавая различные опции в `NewRouter`:
+
+-   `WithLogger(logger *zap.Logger)`: Устанавливает кастомный логгер Zap.
+-   `WithReadTimeout(timeout time.Duration)`: Устанавливает таймаут для чтения сообщений.
+-   `WithErrorHandler(handler func(error))`: Устанавливает обработчик ошибок.
+-   `WithConsumerConfig(cfg *kafka.ConfigMap)`: Конфигурация для consumer.
+
+## Middleware
+
+Вы можете добавлять middleware для обработки сообщений перед тем, как они попадут в основной обработчик.
+
 ```go
-// Middleware для логирования обработки сообщений
+// Пример middleware для логирования
 func loggingMiddleware(next kafkalight.MessageHandler) kafkalight.MessageHandler {
-    return func(msg *kafkalight.Message) error {
-        log.Printf("Обработка сообщения: %v", msg)
-        return next(msg)
+    return func(ctx context.Context, msg *kafkalight.Message) error {
+        log.Printf("Получено сообщение для топика %s", msg.Topic)
+        return next(ctx, msg)
     }
 }
 
-// Применяем middleware к обработчику
+// ...
 router.Use(loggingMiddleware)
+router.RegisterRoute("my-topic", handler) // middleware будет применен к этому обработчику
 ```
-## 4. Обработка ошибок
-
-Можно указать кастомный обработчик ошибок при создании маршрутизатора через опцию WithErrorHandler. Если обработчик не передан, используется стандартный, который логирует ошибку.
-```go
-// Создаем маршрутизатор с кастомным обработчиком ошибок
-router := kafkalight.NewRouter(kafkalight.WithErrorHandler(func(err error) {
-    log.Fatalf("Кастомная ошибка: %v", err)
-}))
-```
-## 5. Установка таймаута для чтения сообщений
-
-Можно установить кастомный таймаут для Kafka consumer с помощью опции WithReadTimeout.
-```go
-router := kafkalight.NewRouter(kafkalight.WithReadTimeout(10 * time.Second))
-```
-Это гарантирует, что consumer не будет блокироваться на неопределенный срок при ожидании сообщений.
-
-## API
-### KafkaRouter
-
-- NewRouter(options ...Option): Создает новый KafkaRouter с переданными опциями.
-- RegisterRoute(topic string, handler MessageHandler): Регистрирует обработчик сообщений для конкретного Kafka топика.
-- Use(middleware Middleware): Добавляет middleware, который будет применяться к обработчикам сообщений.
-- StartListening(consumer *kafka.Consumer): Начинает прослушивание сообщений из Kafka.
-
-### Options
-
-- WithErrorHandler(handler func(error)): Устанавливает кастомный обработчик ошибок.
-- WithReadTimeout(timeout time.Duration): Устанавливает таймаут для Kafka consumer.
-
-### MessageHandler
-
-- *type MessageHandler func(msg Message) error: Тип функции, используемой для обработки сообщений из Kafka.
-
-### Middleware
-
-- type Middleware func(MessageHandler) MessageHandler: Тип функции, которая изменяет или расширяет обработку сообщений.
-
-### Message
-
-Структура Message представляет сообщение Kafka с дополнительной метаинформацией (например, топик, ключ, заголовки и т.д.).
-```go
-type Message struct {
-    TopicPartition TopicPartition
-    Value          []byte
-    Key            Key
-    Timestamp      time.Time
-    TimestampType  TimestampType
-    Headers        []Header
-}
-```
-### Лицензия
-
-Этот пакет лицензирован по лицензии MIT. См. файл LICENSE для подробностей.
