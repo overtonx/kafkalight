@@ -1,9 +1,11 @@
 module github.com/overtonx/kafkalight
 
-go 1.24.7
+go 1.24.0
+
+toolchain go1.24.7
 
 require (
-	github.com/confluentinc/confluent-kafka-go v1.9.2
+	github.com/confluentinc/confluent-kafka-go/v2 v2.11.1
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel v1.38.0
 	go.opentelemetry.io/otel/sdk v1.38.0
