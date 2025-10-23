@@ -144,7 +144,7 @@ func (r *KafkaRouter) StartListening(ctx context.Context) error {
 		}
 
 		r.wg.Add(1)
-		go func() {
+		func() {
 			defer r.wg.Done()
 			handlerCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
