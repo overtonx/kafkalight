@@ -62,11 +62,11 @@ func NewRouter(opts ...Option) (*KafkaRouter, error) {
 	return router, nil
 }
 
-func (r *KafkaRouter) Use(middleware Middleware) {
+func (r *KafkaRouter) Use(middleware ...Middleware) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.middlewares = append(r.middlewares, middleware)
+	r.middlewares = append(r.middlewares, middleware...)
 }
 
 // RegisterRoute registers a message handler for a specific topic.
