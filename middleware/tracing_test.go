@@ -18,6 +18,7 @@ func TestTracing(t *testing.T) {
 	tracerProvider := sdktrace.NewTracerProvider()
 	otel.SetTracerProvider(tracerProvider)
 	propagator := propagation.TraceContext{}
+	otel.SetTextMapPropagator(propagator)
 
 	// Create a parent context
 	tracer := otel.Tracer("test-tracer")
@@ -37,7 +38,7 @@ func TestTracing(t *testing.T) {
 	})
 
 	// Create and execute the middleware
-	mw := Tracing(propagator)
+	mw := Tracing()
 	finalHandler := mw(handler)
 	err := finalHandler(context.Background(), msg) // Pass a background context, not the parentCtx
 
