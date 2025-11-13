@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,18 +19,20 @@ const (
 type MessageHandler func(ctx context.Context, msg *Message) error
 type Middleware func(MessageHandler) MessageHandler
 type KafkaRouter struct {
-	mu             sync.RWMutex
-	wg             sync.WaitGroup
-	started        bool
-	doneCh         chan struct{}
-	routes         map[string]MessageHandler
-	middlewares    []Middleware
-	topics         []string
-	errorHandler   ErrorHandler
-	readTimeout    time.Duration
-	logger         *zap.Logger
-	consumer       *kafka.Consumer
-	consumerConfig *kafka.ConfigMap
+	mu                sync.RWMutex
+	wg                sync.WaitGroup
+	started           bool
+	doneCh            chan struct{}
+	waitCh            chan struct{}
+	routes            map[string]MessageHandler
+	middlewares       []Middleware
+	topics            []string
+	errorHandler      ErrorHandler
+	readTimeout       time.Duration
+	logger            *zap.Logger
+	consumer          *kafka.Consumer
+	consumerConfig    *kafka.ConfigMap
+	autoCommitEnabled bool
 }
 
 func NewRouter(opts ...Option) (*KafkaRouter, error) {
@@ -40,16 +43,29 @@ func NewRouter(opts ...Option) (*KafkaRouter, error) {
 	}
 
 	router := &KafkaRouter{
-		started:        false,
-		doneCh:         make(chan struct{}),
-		routes:         make(map[string]MessageHandler),
-		readTimeout:    defaultReadTimeout,
-		logger:         zap.NewNop(),
-		consumerConfig: defaultConfig,
+		started:           false,
+		doneCh:            make(chan struct{}),
+		waitCh:            make(chan struct{}),
+		routes:            make(map[string]MessageHandler),
+		readTimeout:       defaultReadTimeout,
+		logger:            zap.NewNop(),
+		consumerConfig:    defaultConfig,
+		autoCommitEnabled: true,
 	}
 
 	for _, opt := range opts {
 		opt(router)
+	}
+
+	val, err := router.consumerConfig.Get("enable.auto.commit", true)
+	if err == nil {
+		switch v := val.(type) {
+		case bool:
+			router.autoCommitEnabled = v
+		case string:
+			sv, _ := strconv.ParseBool(v)
+			router.autoCommitEnabled = sv
+		}
 	}
 
 	c, err := kafka.NewConsumer(router.consumerConfig)
@@ -108,6 +124,7 @@ func (r *KafkaRouter) StartListening(ctx context.Context) error {
 			r.logger.Info("context done, stopping listener")
 			return ctx.Err()
 		case <-r.doneCh:
+			close(r.waitCh)
 			r.logger.Info("done channel closed, stopping listener")
 			return nil
 		default:
@@ -143,15 +160,13 @@ func (r *KafkaRouter) StartListening(ctx context.Context) error {
 			continue
 		}
 
-		r.wg.Add(1)
-		func() {
-			defer r.wg.Done()
-			handlerCtx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			if err := handler(handlerCtx, kafkaMsg); err != nil {
-				r.errorHandler(fmt.Errorf("error handling message: %v", err))
+		if err := handler(ctx, kafkaMsg); err != nil {
+			r.errorHandler(fmt.Errorf("error handling message: %v", err))
+		} else if !r.autoCommitEnabled {
+			if _, err := r.consumer.CommitMessage(msg); err != nil {
+				r.errorHandler(fmt.Errorf("failed to commit message offset: %w", err))
 			}
-		}()
+		}
 	}
 }
 
@@ -167,14 +182,8 @@ func (r *KafkaRouter) Close(ctx context.Context) error {
 
 	r.logger.Info("shutting down, waiting for message handlers to finish")
 
-	waitCh := make(chan struct{})
-	go func() {
-		r.wg.Wait()
-		close(waitCh)
-	}()
-
 	select {
-	case <-waitCh:
+	case <-r.waitCh:
 		r.logger.Info("all message handlers finished")
 	case <-ctx.Done():
 		r.logger.Warn("context cancelled, timed out waiting for message handlers to finish")
