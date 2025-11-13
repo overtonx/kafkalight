@@ -32,3 +32,9 @@ func WithLogger(logger *zap.Logger) Option {
 		r.logger = logger.With(zap.String("module", "kafka-light"))
 	}
 }
+
+func WithCommitOnErrors(errs ...error) Option {
+	return func(r *KafkaRouter) {
+		r.commitWithErrors = append(r.commitWithErrors, errs...)
+	}
+}

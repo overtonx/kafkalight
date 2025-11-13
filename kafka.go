@@ -12,6 +12,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var ErrSkipMessage = errors.New("message should be skipped")
+
 const (
 	defaultReadTimeout = time.Second * 10
 )
@@ -33,6 +35,7 @@ type KafkaRouter struct {
 	consumer          *kafka.Consumer
 	consumerConfig    *kafka.ConfigMap
 	autoCommitEnabled bool
+	commitWithErrors  []error
 }
 
 func NewRouter(opts ...Option) (*KafkaRouter, error) {
@@ -51,6 +54,7 @@ func NewRouter(opts ...Option) (*KafkaRouter, error) {
 		logger:            zap.NewNop(),
 		consumerConfig:    defaultConfig,
 		autoCommitEnabled: true,
+		commitWithErrors:  []error{ErrSkipMessage},
 	}
 
 	for _, opt := range opts {
@@ -160,14 +164,31 @@ func (r *KafkaRouter) StartListening(ctx context.Context) error {
 			continue
 		}
 
-		if err := handler(ctx, kafkaMsg); err != nil {
-			r.errorHandler(fmt.Errorf("error handling message: %v", err))
-		} else if !r.autoCommitEnabled {
+		handlerErr := handler(ctx, kafkaMsg)
+
+		if r.shouldCommitMessage(handlerErr) {
 			if _, err := r.consumer.CommitMessage(msg); err != nil {
 				r.errorHandler(fmt.Errorf("failed to commit message offset: %w", err))
 			}
 		}
 	}
+}
+
+func (r *KafkaRouter) shouldCommitMessage(handlerErr error) bool {
+	if r.autoCommitEnabled {
+		return false
+	}
+
+	if handlerErr == nil {
+		return true
+	}
+
+	for _, targetErr := range r.commitWithErrors {
+		if errors.Is(handlerErr, targetErr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *KafkaRouter) Close(ctx context.Context) error {
