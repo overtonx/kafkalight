@@ -2,7 +2,6 @@ package kafkalight
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -115,10 +114,6 @@ func (r *KafkaRouter) StartListening(ctx context.Context) error {
 
 		msg, err := r.consumer.ReadMessage(r.readTimeout)
 		if err != nil {
-			var kafkaErr kafka.Error
-			if errors.As(err, &kafkaErr) && kafkaErr.Code() == kafka.ErrTimedOut {
-				continue
-			}
 			r.errorHandler(err)
 			continue
 		}
