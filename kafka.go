@@ -17,18 +17,19 @@ const (
 type MessageHandler func(ctx context.Context, msg *Message) error
 type Middleware func(MessageHandler) MessageHandler
 type KafkaRouter struct {
-	mu             sync.RWMutex
-	wg             sync.WaitGroup
-	started        bool
-	doneCh         chan struct{}
-	routes         map[string]MessageHandler
-	middlewares    []Middleware
-	topics         []string
-	errorHandler   ErrorHandler
-	readTimeout    time.Duration
-	logger         *zap.Logger
-	consumer       *kafka.Consumer
-	consumerConfig *kafka.ConfigMap
+	mu               sync.RWMutex
+	wg               sync.WaitGroup
+	started          bool
+	doneCh           chan struct{}
+	routes           map[string]MessageHandler
+	middlewares      []Middleware
+	topics           []string
+	errorHandler     ErrorHandler
+	readTimeout      time.Duration
+	logger           *zap.Logger
+	consumer         *kafka.Consumer
+	consumerConfig   *kafka.ConfigMap
+	enableAutoCommit bool
 }
 
 func NewRouter(opts ...Option) (*KafkaRouter, error) {
@@ -50,6 +51,8 @@ func NewRouter(opts ...Option) (*KafkaRouter, error) {
 	for _, opt := range opts {
 		opt(router)
 	}
+
+	router.enableAutoCommit = isAutoCommitEnabled(router.consumerConfig)
 
 	c, err := kafka.NewConsumer(router.consumerConfig)
 	if err != nil {
@@ -145,9 +148,30 @@ func (r *KafkaRouter) StartListening(ctx context.Context) error {
 			defer cancel()
 			if err := handler(handlerCtx, kafkaMsg); err != nil {
 				r.errorHandler(fmt.Errorf("error handling message: %v", err))
+				return
+			}
+			if !r.enableAutoCommit {
+				if _, err := r.consumer.CommitMessage(msg); err != nil {
+					r.errorHandler(fmt.Errorf("error committing message offset: %v", err))
+				}
 			}
 		}()
 	}
+}
+
+// isAutoCommitEnabled returns true if enable.auto.commit is not explicitly set to false.
+func isAutoCommitEnabled(cfg *kafka.ConfigMap) bool {
+	if cfg == nil {
+		return true
+	}
+	val, err := cfg.Get("enable.auto.commit", true)
+	if err != nil {
+		return true
+	}
+	if b, ok := val.(bool); ok {
+		return b
+	}
+	return true
 }
 
 func (r *KafkaRouter) Close(ctx context.Context) error {
