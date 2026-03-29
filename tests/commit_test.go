@@ -30,6 +30,7 @@ func TestManualCommit_CommitsOffsetOnlyOnSuccess(t *testing.T) {
 	const topic = "test-manual-commit"
 	const groupID = "test-group-manual"
 
+	require.NoError(t, cluster.CreateTopic(topic, 1, 1))
 	produceMessages(t, cluster, topic, "msg-success", "msg-fail")
 
 	cfg := &kafka.ConfigMap{
@@ -59,16 +60,15 @@ func TestManualCommit_CommitsOffsetOnlyOnSuccess(t *testing.T) {
 	require.Equal(t, "msg-success", waitMessage(t, processed), "first processed message")
 	require.Equal(t, "msg-fail", waitMessage(t, processed), "second processed message")
 
-	// Allow async CommitMessage to reach the broker before closing the consumer.
-	time.Sleep(100 * time.Millisecond)
+	// CommitMessage is synchronous and is called before msg-fail is read from Kafka,
+	// so the committed offset is already durable by the time we reach this line.
+	// We assert before Close() because the MockCluster clears group metadata when the
+	// last consumer leaves the group (unlike a real Kafka broker).
+	assertCommittedOffset(t, cluster, groupID, topic, kafka.Offset(1))
 
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer closeCancel()
 	require.NoError(t, router.Close(closeCtx))
-
-	// Committed offset 1 means: the consumer is positioned to re-read from offset 1 (msg-fail).
-	// offset 0 (msg-success) is committed; offset 1 (msg-fail) is not.
-	assertCommittedOffset(t, cluster, groupID, topic, kafka.Offset(1))
 }
 
 // TestManualCommit_NoManualCommitWhenAutoCommitEnabled verifies that the router does not
@@ -82,6 +82,7 @@ func TestManualCommit_NoManualCommitWhenAutoCommitEnabled(t *testing.T) {
 	const topic = "test-auto-commit"
 	const groupID = "test-group-auto"
 
+	require.NoError(t, cluster.CreateTopic(topic, 1, 1))
 	produceMessages(t, cluster, topic, "msg1", "msg2")
 
 	cfg := &kafka.ConfigMap{
@@ -132,7 +133,7 @@ func produceMessages(t *testing.T, cluster *kafka.MockCluster, topic string, val
 		}, nil))
 	}
 
-	p.Flush(50)
+	p.Flush(5000)
 }
 
 func waitMessage(t *testing.T, ch <-chan string) string {
