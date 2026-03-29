@@ -81,6 +81,60 @@ func main() {
 -   `WithErrorHandler(handler func(error))`: Устанавливает обработчик ошибок.
 -   `WithConsumerConfig(cfg *kafka.ConfigMap)`: Конфигурация для consumer.
 
+## Управление offset'ами (enable.auto.commit)
+
+`kafkalight` автоматически определяет настройку `enable.auto.commit` из переданного `kafka.ConfigMap` и меняет поведение коммита offset'ов:
+
+| `enable.auto.commit` | Поведение |
+|---|---|
+| `true` (по умолчанию) | Kafka сама периодически коммитит offset'ы. Роутер не вызывает `CommitMessage`. |
+| `false` | Роутер вызывает `CommitMessage` после каждого **успешно** обработанного сообщения. Если обработчик вернул ошибку — offset не коммитится. |
+
+### Автоматический коммит (по умолчанию)
+
+Если `enable.auto.commit` не задан или равен `true`, управлять offset'ами не нужно — Kafka делает это сама:
+
+```go
+cfg := &kafka.ConfigMap{
+    "bootstrap.servers": "localhost:9092",
+    "group.id":          "my-group",
+    "auto.offset.reset": "earliest",
+    // enable.auto.commit не задан — по умолчанию true
+}
+
+router, _ := kafkalight.NewRouter(kafkalight.WithConsumerConfig(cfg))
+router.RegisterRoute("my-topic", func(ctx context.Context, msg *kafkalight.Message) error {
+    // Offset будет закоммичен автоматически независимо от результата
+    return process(msg)
+})
+```
+
+### Ручной коммит
+
+При `enable.auto.commit: false` роутер коммитит offset только после успешной обработки. Если обработчик вернул ошибку, offset не сдвигается — сообщение будет перечитано после перезапуска consumer.
+
+```go
+cfg := &kafka.ConfigMap{
+    "bootstrap.servers":  "localhost:9092",
+    "group.id":           "my-group",
+    "auto.offset.reset":  "earliest",
+    "enable.auto.commit": false,
+}
+
+router, _ := kafkalight.NewRouter(kafkalight.WithConsumerConfig(cfg))
+router.RegisterRoute("my-topic", func(ctx context.Context, msg *kafkalight.Message) error {
+    if err := process(msg); err != nil {
+        // Возвращаем ошибку — offset НЕ коммитится,
+        // сообщение будет обработано повторно
+        return err
+    }
+    // Возвращаем nil — offset коммитится автоматически роутером
+    return nil
+})
+```
+
+> Ручной режим гарантирует семантику **at-least-once**: каждое сообщение будет обработано хотя бы один раз, даже при падении приложения во время обработки.
+
 ## Middleware
 
 Вы можете добавлять middleware для обработки сообщений перед тем, как они попадут в основной обработчик.
