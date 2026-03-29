@@ -21,6 +21,7 @@ type KafkaRouter struct {
 	wg               sync.WaitGroup
 	started          bool
 	doneCh           chan struct{}
+	listenerDone     chan struct{}
 	routes           map[string]MessageHandler
 	middlewares      []Middleware
 	topics           []string
@@ -42,6 +43,7 @@ func NewRouter(opts ...Option) (*KafkaRouter, error) {
 	router := &KafkaRouter{
 		started:        false,
 		doneCh:         make(chan struct{}),
+		listenerDone:   make(chan struct{}),
 		routes:         make(map[string]MessageHandler),
 		readTimeout:    defaultReadTimeout,
 		logger:         zap.NewNop(),
@@ -102,6 +104,7 @@ func (r *KafkaRouter) StartListening(ctx context.Context) error {
 
 	r.started = true
 	r.mu.Unlock()
+	defer close(r.listenerDone)
 
 	r.logger.Info("router started")
 	for {
@@ -200,5 +203,15 @@ func (r *KafkaRouter) Close(ctx context.Context) error {
 	}
 
 	r.logger.Info("closing kafka consumer")
-	return r.consumer.Close()
+	if err := r.consumer.Close(); err != nil {
+		return err
+	}
+
+	select {
+	case <-r.listenerDone:
+	case <-ctx.Done():
+		r.logger.Warn("context cancelled, timed out waiting for listener to stop")
+	}
+
+	return nil
 }
