@@ -38,7 +38,7 @@ func TestTracing(t *testing.T) {
 	})
 
 	// Create and execute the middleware
-	mw := Tracing()
+	mw := Tracing("test-group")
 	finalHandler := mw(handler)
 	err := finalHandler(context.Background(), msg) // Pass a background context, not the parentCtx
 
@@ -50,5 +50,5 @@ func TestTracing(t *testing.T) {
 	spanFromHandlerCtx := trace.SpanFromContext(handlerCtx)
 	assert.True(t, spanFromHandlerCtx.SpanContext().IsValid())
 	assert.Equal(t, parentSpan.SpanContext().TraceID(), spanFromHandlerCtx.SpanContext().TraceID())
-	assert.Equal(t, parentSpan.SpanContext().SpanID(), spanFromHandlerCtx.SpanContext().SpanID())
+	assert.NotEqual(t, parentSpan.SpanContext().SpanID(), spanFromHandlerCtx.SpanContext().SpanID())
 }
