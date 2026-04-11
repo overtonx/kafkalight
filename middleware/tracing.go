@@ -16,7 +16,7 @@ import (
 
 const (
 	instrumentationName    = "github.com/overtonx/kafkalight/middleware"
-	instrumentationVersion = "v1.0.8"
+	instrumentationVersion = "v1.0.9"
 )
 
 func Tracing(consumerGroup ...string) kafkalight.Middleware {
