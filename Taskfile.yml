@@ -1,0 +1,80 @@
+version: "3"
+
+vars:
+  GO_PACKAGES: ./...
+  E2E_PACKAGES: ./e2e/...
+  UNIT_PACKAGES:
+    sh: go list ./... | grep -v '/e2e' | tr '\n' ' '
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  # ── Tests ──────────────────────────────────────────────────────────────────
+
+  test:
+    desc: Run unit tests with race detector
+    cmds:
+      - go test -race -count=1 {{.UNIT_PACKAGES}}
+
+  test:v:
+    desc: Run unit tests (verbose) with race detector
+    cmds:
+      - go test -v -race -count=1 {{.UNIT_PACKAGES}}
+
+  test:e2e:
+    desc: Run E2E tests against a live Redpanda container (requires Docker)
+    cmds:
+      - go test -v -race -tags e2e -timeout 15m {{.E2E_PACKAGES}}
+
+  test:all:
+    desc: Run unit tests then E2E tests
+    cmds:
+      - task: test
+      - task: test:e2e
+
+  test:cover:
+    desc: Run unit tests and open HTML coverage report
+    vars:
+      COVER_OUT: "{{.TMPDIR | default \"/tmp\"}}/kafkalight-coverage.out"
+    cmds:
+      - go test -race -count=1 -coverprofile={{.COVER_OUT}} -covermode=atomic {{.UNIT_PACKAGES}}
+      - go tool cover -html={{.COVER_OUT}}
+
+  # ── Lint ───────────────────────────────────────────────────────────────────
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run {{.GO_PACKAGES}}
+
+  lint:fix:
+    desc: Run golangci-lint with auto-fix
+    cmds:
+      - golangci-lint run --fix {{.GO_PACKAGES}}
+
+  # ── Build / Vet ────────────────────────────────────────────────────────────
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet {{.GO_PACKAGES}}
+
+  build:
+    desc: Build library and example
+    cmds:
+      - go build {{.GO_PACKAGES}}
+      - go build -tags e2e {{.E2E_PACKAGES}}
+
+  # ── CI ─────────────────────────────────────────────────────────────────────
+
+  ci:
+    desc: Full CI pipeline — vet, lint, unit tests, E2E tests
+    cmds:
+      - task: vet
+      - task: lint
+      - task: test
+      - task: test:e2e

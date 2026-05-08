@@ -1,154 +1,201 @@
 # kafkalight
 
-`kafkalight` — это легковесная библиотека на Go для работы с Apache Kafka. Она построена на основе `confluent-kafka-go` и предоставляет простой механизм маршрутизации для обработки сообщений из разных топиков. Библиотека интегрирована с OpenTelemetry для трассировки и Zap для логирования.
+[![Go Reference](https://pkg.go.dev/badge/github.com/kafkalight/v4.svg)](https://pkg.go.dev/github.com/kafkalight/v4)
+[![Go Report Card](https://goreportcard.com/badge/github.com/kafkalight/v4)](https://goreportcard.com/report/github.com/kafkalight/v4)
 
-## Установка
+Production-ready Kafka consumer library for Go built on top
+of [segmentio/kafka-go](https://github.com/segmentio/kafka-go).
+
+## Features
+
+- **Handler registration** per topic — clean, router-style API
+- **Middleware chain** — Recovery, Logging (zap), Metrics (OTel) built-in; bring your own
+- **Manual offset commit** — offset advances only after successful processing
+- **Retry with exponential backoff + jitter** — configurable attempts, delays, multiplier
+- **OpenTelemetry metrics** — counters and latency histogram out of the box
+- **Graceful shutdown** — drains in-flight messages before stopping
+- **Concurrency** — configurable worker pool per topic
+
+## Installation
 
 ```bash
-go get github.com/overtonx/kafkalight
+go get github.com/kafkalight/v4
 ```
 
-## Использование
+Requires Go 1.21+.
 
-Вот простой пример использования `kafkalight` для подписки на топик и обработки сообщений:
+## Quick start
 
 ```go
 package main
 
 import (
 	"context"
-	"fmt"
-	"log"
-	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/overtonx/kafkalight"
+	kafkalight "github.com/kafkalight/v4"
+	"go.uber.org/zap"
 )
 
-// messageHandler - это обработчик для сообщений из Kafka.
-func messageHandler(ctx context.Context, msg *kafkalight.Message) error {
-	fmt.Printf("Сообщение получено из топика %s: %s\n", msg.Topic, string(msg.Value))
-	// Здесь ваша логика обработки сообщения
-	return nil
-}
-
 func main() {
-	// Создаем новый роутер с базовой конфигурацией.
-	router, err := kafkalight.NewRouter()
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+
+	consumer, err := kafkalight.New(
+		kafkalight.WithBrokers("localhost:9092"),
+		kafkalight.WithGroupID("my-service"),
+		kafkalight.WithConcurrency(4),
+		kafkalight.WithLogger(logger),
+	)
 	if err != nil {
-		log.Fatalf("Ошибка при создании роутера: %v", err)
+		logger.Fatal("create consumer", zap.Error(err))
 	}
 
-	// Регистрируем обработчик для топика "my-topic".
-	router.RegisterRoute("my-topic", messageHandler)
+	consumer.Register("orders", kafkalight.HandlerFunc(func(ctx context.Context, msg *kafkalight.Message) error {
+		// process msg.Value …
+		return nil
+	}))
 
-	// Запускаем прослушивание сообщений в отдельной горутине.
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		log.Println("Запуск прослушивания Kafka...")
-		if err := router.StartListening(ctx); err != nil {
-			log.Printf("Ошибка при прослушивании: %v", err)
-		}
-	}()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	// Ожидаем сигнала для завершения работы.
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	log.Println("Получен сигнал завершения, остановка...")
-	cancel() // Отменяем контекст, чтобы остановить StartListening
-
-	// Корректно завершаем работу роутера.
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-
-	if err := router.Close(shutdownCtx); err != nil {
-		log.Fatalf("Ошибка при закрытии роутера: %v", err)
-	}
-	log.Println("Роутер успешно остановлен.")
+	consumer.Run(ctx) // blocks until ctx is cancelled
 }
 ```
 
-## Конфигурация
+## Configuration
 
-Вы можете настроить роутер, передавая различные опции в `NewRouter`:
+All options are passed via functional `WithXxx` helpers:
 
--   `WithLogger(logger *zap.Logger)`: Устанавливает кастомный логгер Zap.
--   `WithReadTimeout(timeout time.Duration)`: Устанавливает таймаут для чтения сообщений.
--   `WithErrorHandler(handler func(error))`: Устанавливает обработчик ошибок.
--   `WithConsumerConfig(cfg *kafka.ConfigMap)`: Конфигурация для consumer.
+| Option                         | Default                       | Description                          |
+|--------------------------------|-------------------------------|--------------------------------------|
+| `WithBrokers(addrs...)`        | **required**                  | Kafka broker addresses               |
+| `WithGroupID(id)`              | **required**                  | Consumer group ID                    |
+| `WithConcurrency(n)`           | `1`                           | Workers per topic reader             |
+| `WithRetryPolicy(p)`           | 3 attempts, 100ms→10s backoff | Retry behaviour                      |
+| `WithGlobalMiddlewares(mw...)` | none                          | Middlewares applied to every handler |
+| `WithLogger(l)`                | `zap.NewNop()`                | Zap logger                           |
+| `WithMeterProvider(mp)`        | noop                          | OpenTelemetry `MeterProvider`        |
+| `WithReadTimeout(d)`           | `10s`                         | Max idle wait for a Kafka message    |
+| `WithCommitInterval(d)`        | `0` (per-message)             | Offset auto-commit interval          |
+| `WithStartOffset(o)`           | `kafka.LastOffset`            | Starting offset (no committed state) |
 
-## Управление offset'ами (enable.auto.commit)
-
-`kafkalight` автоматически определяет настройку `enable.auto.commit` из переданного `kafka.ConfigMap` и меняет поведение коммита offset'ов:
-
-| `enable.auto.commit` | Поведение |
-|---|---|
-| `true` (по умолчанию) | Kafka сама периодически коммитит offset'ы. Роутер не вызывает `CommitMessage`. |
-| `false` | Роутер вызывает `CommitMessage` после каждого **успешно** обработанного сообщения. Если обработчик вернул ошибку — offset не коммитится. |
-
-### Автоматический коммит (по умолчанию)
-
-Если `enable.auto.commit` не задан или равен `true`, управлять offset'ами не нужно — Kafka делает это сама:
+## Handler registration
 
 ```go
-cfg := &kafka.ConfigMap{
-    "bootstrap.servers": "localhost:9092",
-    "group.id":          "my-group",
-    "auto.offset.reset": "earliest",
-    // enable.auto.commit не задан — по умолчанию true
-}
+// Via interface
+consumer.Register("payments", myHandler)
 
-router, _ := kafkalight.NewRouter(kafkalight.WithConsumerConfig(cfg))
-router.RegisterRoute("my-topic", func(ctx context.Context, msg *kafkalight.Message) error {
-    // Offset будет закоммичен автоматически независимо от результата
-    return process(msg)
+// Via function literal
+consumer.RegisterFunc("payments", func (ctx context.Context, msg *kafkalight.Message) error {
+return processPayment(ctx, msg.Value)
 })
+
+// With topic-specific middlewares (applied after global ones)
+consumer.Register("payments", myHandler, authMiddleware, tracingMiddleware)
 ```
-
-### Ручной коммит
-
-При `enable.auto.commit: false` роутер коммитит offset только после успешной обработки. Если обработчик вернул ошибку, offset не сдвигается — сообщение будет перечитано после перезапуска consumer.
-
-```go
-cfg := &kafka.ConfigMap{
-    "bootstrap.servers":  "localhost:9092",
-    "group.id":           "my-group",
-    "auto.offset.reset":  "earliest",
-    "enable.auto.commit": false,
-}
-
-router, _ := kafkalight.NewRouter(kafkalight.WithConsumerConfig(cfg))
-router.RegisterRoute("my-topic", func(ctx context.Context, msg *kafkalight.Message) error {
-    if err := process(msg); err != nil {
-        // Возвращаем ошибку — offset НЕ коммитится,
-        // сообщение будет обработано повторно
-        return err
-    }
-    // Возвращаем nil — offset коммитится автоматически роутером
-    return nil
-})
-```
-
-> Ручной режим гарантирует семантику **at-least-once**: каждое сообщение будет обработано хотя бы один раз, даже при падении приложения во время обработки.
 
 ## Middleware
 
-Вы можете добавлять middleware для обработки сообщений перед тем, как они попадут в основной обработчик.
-
 ```go
-// Пример middleware для логирования
-func loggingMiddleware(next kafkalight.MessageHandler) kafkalight.MessageHandler {
-    return func(ctx context.Context, msg *kafkalight.Message) error {
-        log.Printf("Получено сообщение для топика %s", msg.Topic)
-        return next(ctx, msg)
-    }
+// Built-in middlewares (applied automatically in this order):
+//   RecoveryMiddleware → LoggingMiddleware → MetricsMiddleware → your handlers
+
+// Custom middleware:
+func TimeoutMiddleware(d time.Duration) kafkalight.Middleware {
+return func (next kafkalight.Handler) kafkalight.Handler {
+return kafkalight.HandlerFunc(func (ctx context.Context, msg *kafkalight.Message) error {
+ctx, cancel := context.WithTimeout(ctx, d)
+defer cancel()
+return next.Handle(ctx, msg)
+})
+}
 }
 
-// ...
-router.Use(loggingMiddleware)
-router.RegisterRoute("my-topic", handler) // middleware будет применен к этому обработчику
+consumer.Register("orders", handler, TimeoutMiddleware(5*time.Second))
 ```
+
+## Retry policy
+
+```go
+consumer, _ := kafkalight.New(
+kafkalight.WithBrokers("localhost:9092"),
+kafkalight.WithGroupID("svc"),
+kafkalight.WithRetryPolicy(kafkalight.RetryPolicy{
+MaxAttempts:  5,
+InitialDelay: 200 * time.Millisecond,
+MaxDelay:     30 * time.Second,
+Multiplier:   2.0,
+Jitter:       0.2, // ±20% randomisation
+}),
+)
+```
+
+After all attempts are exhausted the offset is committed and the message is skipped.
+
+## OpenTelemetry metrics
+
+Pass any `metric.MeterProvider` (e.g. from the OTel SDK):
+
+```go
+import "go.opentelemetry.io/otel/sdk/metric"
+
+provider := metric.NewMeterProvider( /* exporters … */)
+consumer, _ := kafkalight.New(
+kafkalight.WithMeterProvider(provider),
+// …
+)
+```
+
+Instruments registered:
+
+| Name                                      | Type      | Labels                      |
+|-------------------------------------------|-----------|-----------------------------|
+| `kafka_consumer_messages_processed_total` | Counter   | `topic`, `status=ok\|error` |
+| `kafka_consumer_retries_total`            | Counter   | `topic`                     |
+| `kafka_consumer_processing_duration_ms`   | Histogram | `topic`                     |
+
+## Graceful shutdown
+
+```go
+// Option 1: cancel the context passed to Run
+ctx, cancel := context.WithCancel(context.Background())
+go consumer.Run(ctx)
+cancel() // triggers shutdown
+
+// Option 2: call Shutdown from another goroutine
+go consumer.Run(ctx)
+consumer.Shutdown()
+```
+
+`Run` waits for all in-flight messages to complete processing before returning.
+
+## Message type
+
+```go
+type Message struct {
+Topic     string
+Partition int
+Offset    int64
+Key       []byte
+Value     []byte
+Headers   []Header
+Time      time.Time
+}
+
+// Helpers
+msg.HeaderValue("x-correlation-id") // []byte or nil
+msg.Raw() // underlying kafka.Message
+```
+
+## Error types
+
+```go
+errors.Is(err, kafkalight.ErrNoHandler) // no handler registered for topic
+errors.Is(err, kafkalight.ErrMaxRetries) // all retry attempts exhausted
+```
+
+## License
+
+MIT

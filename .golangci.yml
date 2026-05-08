@@ -1,0 +1,62 @@
+run:
+  timeout: 5m
+  go: "1.21"
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - unparam
+    - gocritic
+    - noctx
+    - bodyclose
+    - contextcheck
+    - durationcheck
+    - exhaustive
+    - exportloopref
+    - nilerr
+    - nilnil
+    - prealloc
+    - predeclared
+    - reassign
+    - tenv
+    - tparallel
+    - wastedassign
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  govet:
+    enable-all: true
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+    disabled-checks:
+      - commentedOutCode
+      - whyNoLint
+  goimports:
+    local-prefixes: github.com/kafkalight/v4
+
+issues:
+  exclude-rules:
+    # Ignore error from zap.Logger.Sync in main/example.
+    - path: example/
+      linters:
+        - errcheck
+    # Allow rand.Float64 without seed in retry jitter (non-security use).
+    - text: "rand.Float64"
+      linters:
+        - gosec
+  max-issues-per-linter: 0
+  max-same-issues: 0
